@@ -166,3 +166,93 @@ class GatewayNotReadyError(HomeAssistantError):
 
 class ConnectionFailedError(HomeAssistantError):
     """Error to indicate there is invalid auth."""
+
+diff --git a/custom_components/selve/config_flow.py b/custom_components/selve/config_flow.py
+index 2f1aa12..ac77c65 100644
+--- a/custom_components/selve/config_flow.py
++++ b/custom_components/selve/config_flow.py
+@@ -1,10 +1,67 @@
+ from __future__ import annotations
++import logging
++import asyncio
++from typing import Optional
+ from homeassistant import config_entries
+ from homeassistant.core import HomeAssistant
+ from .const import DOMAIN
++_LOGGER = logging.getLogger(__name__)
++
++# --- begin: defensive monkey-patch for upstream "selve" lib (NoneType.close crash) ---
++try:
++    import selve as _selve
++    _orig_setup = getattr(_selve.Gateway, "setup", None)
++    if asyncio.iscoroutinefunction(_orig_setup):
++        async def _safe_setup(self, *args, **kwargs):
++            ser = getattr(self, "_serial", None)
++            if ser is not None:
++                try:
++                    ser.close()
++                except Exception as e:
++                    _LOGGER.warning("Selve: error while closing previous serial: %s", e)
++            try:
++                return await _orig_setup(self, *args, **kwargs)
++            except AttributeError as e:
++                if "has no attribute 'close'" in str(e):
++                    _LOGGER.error("Selve: avoided upstream NoneType.close() crash; treating as connection failure")
++                    return False
++                raise
++        _selve.Gateway.setup = _safe_setup  # type: ignore[attr-defined]
++        _LOGGER.debug("Selve: applied defensive monkey-patch for Gateway.setup()")
++except Exception as e:
++    _LOGGER.debug("Selve: could not apply monkey-patch: %s", e)
++# --- end: defensive monkey-patch ---
++
++# Helper: blockierendes Test-Öffnen im Executor ausführen
++def _test_open_serial(port: str, baudrate: int = 9600, timeout: float = 1.0) -> Optional[str]:
++    try:
++        from serial import Serial
++        s = Serial(port=port, baudrate=baudrate, timeout=timeout)
++        try:
++            s.close()
++        except Exception:
++            pass
++        return None  # OK
++    except Exception as e:
++        return str(e)  # Fehlertext zurück
+@@ -37,14 +94,41 @@ class SelveConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+-        # bisher: Ports scannen (blockiert Event-Loop)
+-        # ports = gateway.list_ports()
++        # 1) Optional: Ports im Executor scannen (kein Blocking). Oder Scan ganz überspringen.
++        try:
++            ports = await self.hass.async_add_executor_job(gateway.list_ports)
++        except Exception as e:
++            _LOGGER.exception("Selve: listing serial ports failed: %s", e)
++            ports = []
+ 
+         # UI/Fortschritt NICHT vom Scan abhängig machen: manuelle Eingabe erlauben
+         # ...
+ 
+-        # ok = await gateway.setup(discover=False, fromConfigFlow=True)
++        # 2) Wenn Nutzer bereits einen Port eingegeben hat, Preflight-Test ausführen
++        user_port = None
++        if user_input and "port" in user_input:
++            user_port = user_input["port"]
++
++        if user_port:
++            err = await self.hass.async_add_executor_job(_test_open_serial, user_port, 9600, 1.0)
++            if err:
++                _LOGGER.error("Error at com port: %s", err)
++                return self.async_abort(reason="cannot_connect")
++
++        # 3) Eigentliches Setup: robust mit Try/Except
++        try:
++            ok = await gateway.setup(discover=False, fromConfigFlow=True)
++        except Exception as e:
++            _LOGGER.exception("Selve: setup() raised during config flow: %s", e)
++            return self.async_abort(reason="cannot_connect")
++
++        if ok is False:
++            _LOGGER.error("Selve: setup() returned False (cannot connect)")
++            return self.async_abort(reason="cannot_connect")
+ 
+         return self.async_create_entry(title="Selve NG", data=user_input)
+
