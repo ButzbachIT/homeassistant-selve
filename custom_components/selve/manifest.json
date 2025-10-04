@@ -3,9 +3,9 @@
     "name": "Selve NG",
     "documentation": "https://github.com/Kannix2005/homeassistant-selve",
     "issue_tracker": "https://github.com/Kannix2005/homeassistant-selve/issues",
-    "codeowners": ["@Kannix2005"],
+    "codeowners": ["@Kannix2005 & Butzbach IT"],
     "requirements": ["python-selve-new==2.3.4"],
-    "version": "3.1.7",
+    "version": "3.1.7-patched",
     "iot_class": "local_polling",
     "config_flow": true,
     "loggers": ["custom_components.selve"]
