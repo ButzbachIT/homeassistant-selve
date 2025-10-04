@@ -39,7 +39,15 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if user_input["autodiscovery"] is True:
                 try:
                     gateway = Selve(None, discover=False, logger=_LOGGER)
-                    await gateway.setup(discover=False, fromConfigFlow=True)
+                    try:
+                        ok = await gateway.setup(discover=False, fromConfigFlow=True)
+                    except Exception as e:
+                        _LOGGER.exception("Selve: setup() raised during config flow: %s", e)
+                        return self.async_abort(reason="cannot_connect")
+                    
+                    if ok is False:
+                        _LOGGER.error("Selve: setup() returned False (cannot connect)")
+                        return self.async_abort(reason="cannot_connect")
                     data[CONF_PORT] = gateway._port
                     return self.async_create_entry(title="Selve Gateway", data=data)
                 except PortError:
