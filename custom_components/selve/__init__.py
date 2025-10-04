@@ -7,6 +7,43 @@ import asyncio
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback, ServiceResponse, SupportsResponse
 from .const import DOMAIN
+# --- begin temporary monkey-patch for upstream "selve" lib (Python 3.13 crash) ---
+import logging
+import asyncio
+
+_LOGGER = logging.getLogger(__name__)
+
+try:
+    import selve as _selve
+    _orig_setup = getattr(_selve.Gateway, "setup", None)
+
+    if asyncio.iscoroutinefunction(_orig_setup):
+        async def _safe_setup(self, *args, **kwargs):
+            # defensiv: alten Serial-Port schließen, falls vorhanden
+            ser = getattr(self, "_serial", None)
+            if ser is not None:
+                try:
+                    ser.close()
+                except Exception as e:
+                    _LOGGER.warning("Selve: ignoring error while closing serial: %s", e)
+
+            try:
+                return await _orig_setup(self, *args, **kwargs)
+            except AttributeError as e:
+                # typischer Upstream-Bug: 'NoneType' object has no attribute 'close'
+                if "has no attribute 'close'" in str(e):
+                    _LOGGER.error("Selve: upstream NoneType.close() crash avoided; treating as connection failure")
+                    return False
+                raise
+
+        _selve.Gateway.setup = _safe_setup  # type: ignore[attr-defined]
+        _LOGGER.debug("Selve: applied defensive monkey-patch for Gateway.setup()")
+    else:
+        _LOGGER.debug("Selve: upstream Gateway.setup is not async; monkey-patch skipped")
+except Exception as e:
+    _LOGGER.debug("Selve: could not apply monkey-patch (%s) — continuing without it", e)
+# --- end temporary monkey-patch ---
+
 from collections import defaultdict
 import logging
 import voluptuous as vol
